@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import * as core from '@actions/core'
 import * as io from '@actions/io'
 import * as k8s from '@kubernetes/client-node'
@@ -28,6 +30,36 @@ import {
   fixArgs
 } from '../k8s/utils'
 import { CONTAINER_EXTENSION_PREFIX, JOB_CONTAINER_NAME } from './constants'
+
+const credentialsPath = process.env["TOS_CREDENTIALS_PATH"] || "/etc/tos-credentials"
+
+// mask credentials from environment variables **and** credentials files
+function maskCredentials(key: string): void {
+  if (process.env[`TOS_${key}`]) {
+    core.debug(`mask TOS_${key} from environment variable.`)
+    core.setSecret(process.env[`TOS_${key}`]!)
+  }
+
+  const credentialsFile = join(credentialsPath, `TOS_${key}`)
+  try {
+    const value = readFileSync(credentialsFile, "utf8").trim()
+    if (!value) {
+      core.warning(`a null value was read from the file: ${credentialsFile}`)
+      return
+    }
+    core.debug(`mask TOS_${key} from file: ${credentialsFile}`)
+    core.setSecret(value)
+    return
+  } catch (error: any) {
+    if (error.code === 'ENOENT') {
+      core.debug(`credentials file ${credentialsFile} not found`)
+      return
+    } else {
+      core.error("an error occurred when reading credentials file", error)
+      throw new Error(`Error loading credentials: ${error.message}`)
+    }
+  }
+}
 
 export async function prepareJob(
   args: PrepareJobArgs,
@@ -103,6 +135,12 @@ export async function prepareJob(
     await prunePods()
     throw new Error(`pod failed to come online with error: ${err}`)
   }
+
+  maskCredentials('ACCESS_KEY')
+  maskCredentials('SECRET_KEY')
+  maskCredentials('ENDPOINT')
+  maskCredentials('REGION')
+  maskCredentials('BUCKET_NAME')
 
   core.debug('Job pod is ready for traffic')
 
